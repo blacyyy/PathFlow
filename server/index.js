@@ -6,10 +6,6 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import LearningPath from "./models/LearningPath.js";
-import jwt from "jsonwebtoken";
-import bcrypt from "bcryptjs";
-import cookieParser from "cookie-parser";
-import User from "./models/User.js";
 
 // Load environment variables
 dotenv.config();
@@ -22,7 +18,6 @@ app.use(cors({
   origin: process.env.CLIENT_URL || "http://localhost:3000",
   credentials: true
 }));
-app.use(cookieParser());
 
 // Rate limiting
 const limiter = rateLimit({
@@ -154,71 +149,6 @@ const generateFallbackPath = (skills, goal) => {
 };
 
 // Routes
-// Auth helpers
-const signToken = (user) => {
-  const jwtSecret = process.env.JWT_SECRET || "dev-secret-change";
-  return jwt.sign({ id: user._id, email: user.email }, jwtSecret, { expiresIn: "7d" });
-};
-
-const authRequired = (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : (req.cookies?.token || null);
-    if (!token) return res.status(401).json({ success: false, error: "Unauthorized" });
-    const jwtSecret = process.env.JWT_SECRET || "dev-secret-change";
-    const payload = jwt.verify(token, jwtSecret);
-    req.user = payload;
-    return next();
-  } catch (err) {
-    return res.status(401).json({ success: false, error: "Invalid or expired token" });
-  }
-};
-
-// Auth routes
-app.post("/auth/register", async (req, res) => {
-  try {
-    if (!isMongoConnected) return res.status(503).json({ success: false, error: "Database unavailable" });
-    const { name, email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ success: false, error: "Email and password required" });
-    const existing = await User.findOne({ email: email.toLowerCase() });
-    if (existing) return res.status(409).json({ success: false, error: "Email already in use" });
-    const passwordHash = await bcrypt.hash(password, 10);
-    const user = await User.create({ name: name?.trim(), email: email.toLowerCase(), passwordHash });
-    const token = signToken(user);
-    return res.status(201).json({ success: true, token, user: { id: user._id, name: user.name, email: user.email } });
-  } catch (err) {
-    console.error("Auth register error:", err.message);
-    return res.status(500).json({ success: false, error: "Registration failed" });
-  }
-});
-
-app.post("/auth/login", async (req, res) => {
-  try {
-    if (!isMongoConnected) return res.status(503).json({ success: false, error: "Database unavailable" });
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ success: false, error: "Email and password required" });
-    const user = await User.findOne({ email: email.toLowerCase() });
-    if (!user) return res.status(401).json({ success: false, error: "Invalid credentials" });
-    const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(401).json({ success: false, error: "Invalid credentials" });
-    const token = signToken(user);
-    return res.json({ success: true, token, user: { id: user._id, name: user.name, email: user.email } });
-  } catch (err) {
-    console.error("Auth login error:", err.message);
-    return res.status(500).json({ success: false, error: "Login failed" });
-  }
-});
-
-app.get("/auth/me", authRequired, async (req, res) => {
-  try {
-    if (!isMongoConnected) return res.status(503).json({ success: false, error: "Database unavailable" });
-    const user = await User.findById(req.user.id).lean();
-    if (!user) return res.status(404).json({ success: false, error: "User not found" });
-    return res.json({ success: true, user: { id: user._id, name: user.name, email: user.email } });
-  } catch (err) {
-    return res.status(500).json({ success: false, error: "Failed to fetch user" });
-  }
-});
 app.get("/", (req, res) => {
   res.json({
     message: "🚀 Learning Path Generator API",
@@ -247,7 +177,7 @@ app.get("/health", async (req, res) => {
 });
 
 // Main AI-powered learning path generation (detailed text steps)
-app.post("/generate-path", authRequired, aiLimiter, validateLearningPathInput, async (req, res) => {
+app.post("/generate-path", aiLimiter, validateLearningPathInput, async (req, res) => {
   const { skills, goal } = req.body;
   const startTime = Date.now();
   
@@ -352,7 +282,7 @@ Format: Return only the numbered steps, nothing else.
 });
 
 // NEW: Simplified roadmap step generator (for canvas)
-app.post("/generate-roadmap-steps", authRequired, aiLimiter, validateLearningPathInput, async (req, res) => {
+app.post("/generate-roadmap-steps", aiLimiter, validateLearningPathInput, async (req, res) => {
   const { skills, goal } = req.body;
 
   try {
@@ -387,7 +317,7 @@ Rules:
 });
 
 // Get saved learning paths (for dashboard)
-app.get("/paths", authRequired, async (req, res) => {
+app.get("/paths", async (req, res) => {
   if (!isMongoConnected) {
     return res.status(503).json({
       success: false,
